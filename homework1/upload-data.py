@@ -1,109 +1,152 @@
-import os
-import argparse
-import pandas as pd
-import psycopg2
-from psycopg2.extras import execute_values
-from dotenv import load_dotenv
+#!/usr/bin/env python
+# coding: utf-8
 
-# Load environment variables from .env file
-load_dotenv()
+# In[98]:
 
-# Database connection parameters
-db_config = {
-    'host': os.getenv('POSTGRES_HOST'),
-    'port': os.getenv('POSTGRES_PORT'),
-    'database': os.getenv('POSTGRES_DB'),
-    'user': os.getenv('POSTGRES_USER'),
-    'password': os.getenv('POSTGRES_PASSWORD')
-}
 
-def create_database_and_table(csv_file_path, table_name):
-    """
-    Create the database and table if they don't exist.
-    """
+import pandas as pd 
+import pyarrow.parquet as pq
+from time import time
+
+
+# In[99]:
+
+
+df=pd.read_csv('./data/green_tripdata_2019-10.csv', nrows=100)
+
+
+# In[100]:
+
+
+df.head()
+
+
+# In[101]:
+
+
+df.lpep_pickup_datetime = pd.to_datetime(df.lpep_pickup_datetime)
+df.lpep_dropoff_datetime = pd.to_datetime(df.lpep_dropoff_datetime)
+
+
+# In[102]:
+
+
+from sqlalchemy import create_engine
+
+
+# In[103]:
+
+
+engine = create_engine('postgresql://postgres:postgres@localhost:5433/ny_taxi')
+
+
+# In[104]:
+
+
+print(pd.io.sql.get_schema(df, name='green_tripdata', con=engine))
+
+
+# In[116]:
+
+
+df_iter = pd.read_csv('./data/green_tripdata_2019-10.csv', iterator=True, chunksize=100000, low_memory=False)
+
+
+# In[117]:
+
+
+df = next(df_iter)
+
+
+# In[118]:
+
+
+len(df)
+
+
+# In[119]:
+
+
+df.lpep_pickup_datetime = pd.to_datetime(df.lpep_pickup_datetime)
+df.lpep_dropoff_datetime = pd.to_datetime(df.lpep_dropoff_datetime)
+
+
+# In[120]:
+
+
+df
+
+
+# In[121]:
+
+
+df.head(n=0).to_sql(name='green_tripdata', con=engine, if_exists='replace')
+
+
+# In[122]:
+
+
+get_ipython().run_line_magic('time', "df.to_sql(name='green_tripdata', con=engine, if_exists='append')")
+
+
+# In[123]:
+
+
+from time import time
+
+
+# In[125]:
+
+
+while True:
     try:
-        # Connect to the specified database
-        conn = psycopg2.connect(**db_config)
-        cur = conn.cursor()
+        t_start = time()
 
-        # Read the CSV file to infer column names
-        df = pd.read_csv(csv_file_path, nrows=100)  # Sample 100 rows for better inference
+        # Get the next chunk of data
+        df = next(df_iter)
 
-        # Generate the CREATE TABLE SQL statement
-        columns_with_types = []
-        for col in df.columns:
-            # Use TEXT as the default column type to avoid data type mismatches
-            columns_with_types.append(f"{col} TEXT")
+        # Convert datetime columns
+        df.lpep_pickup_datetime = pd.to_datetime(df.lpep_pickup_datetime)
+        df.lpep_dropoff_datetime = pd.to_datetime(df.lpep_dropoff_datetime)
 
-        create_table_query = f"""
-        CREATE TABLE IF NOT EXISTS {table_name} (
-            {', '.join(columns_with_types)}
-        );
-        """
+        # Insert the chunk into the database
+        df.to_sql(name='green_tripdata', con=engine, if_exists='append')
 
-        # Execute the CREATE TABLE query
-        cur.execute(create_table_query)
-        conn.commit()
-        print(f"Table {table_name} created or already exists.")
+        t_end = time()
+
+        print('Inserted another chunk, took %.3f seconds' % (t_end - t_start))
+
+    except StopIteration:
+        # No more chunks to process
+        print("Finished processing all chunks.")
+        break
 
     except Exception as e:
-        print(f"Table creation error: {e}")
+        # Handle any other exceptions
+        print(f"An error occurred: {e}")
+        break
 
-    finally:
-        if cur:
-            cur.close()
-        if conn:
-            conn.close()
 
-def load_csv_to_postgres(csv_file_path, table_name):
-    """
-    Load data from a CSV file into a PostgreSQL table.
-    """
-    try:
-        # Read CSV file into a pandas DataFrame
-        df = pd.read_csv(csv_file_path, low_memory=False)  # Suppress DtypeWarning
+# In[46]:
 
-        # Convert DataFrame to a list of tuples
-        data_tuples = [tuple(x) for x in df.to_numpy()]
 
-        # Get column names
-        columns = ','.join(df.columns)
+df_zones = pd.read_csv('./data/taxi_zone_lookup.csv')
 
-        # SQL query to insert data
-        insert_query = f"INSERT INTO {table_name} ({columns}) VALUES %s"
 
-        # Connect to the PostgreSQL database
-        conn = psycopg2.connect(**db_config)
-        cur = conn.cursor()
+# In[126]:
 
-        # Execute the insert query
-        execute_values(cur, insert_query, data_tuples)
 
-        # Commit the transaction
-        conn.commit()
-        print(f"Data from {csv_file_path} inserted successfully into {table_name}!")
+df_zones.head()
 
-    except Exception as e:
-        print(f"Error: {e}")
 
-    finally:
-        # Close the cursor and connection
-        if cur:
-            cur.close()
-        if conn:
-            conn.close()
+# In[127]:
 
-if __name__ == "__main__":
-    # Set up argument parsing
-    parser = argparse.ArgumentParser(description="Load CSV data into a PostgreSQL table.")
-    parser.add_argument("csv_file_path", help="Path to the CSV file.")
-    parser.add_argument("table_name", help="Name of the PostgreSQL table to insert data into.")
 
-    # Parse arguments
-    args = parser.parse_args()
+df_zones.to_sql(name='zones', con=engine, if_exists='replace')
 
-    # Create the database and table if they don't exist
-    create_database_and_table(args.csv_file_path, args.table_name)
 
-    # Call the function to load CSV data into PostgreSQL
-    load_csv_to_postgres(args.csv_file_path, args.table_name)
+# In[ ]:
+
+
+
+
